@@ -235,4 +235,27 @@ var _ = Describe("[kube-api]cluster installation", func() {
 			getAgentCRD(ctx, kubeClient, key)
 		}
 	})
+
+	It("deploy clusterDeployment with agent and update agent", func() {
+		secretRef := deployLocalObjectSecretIfNeeded(ctx, kubeClient)
+		spec := getDefaultClusterDeploymentSpec(secretRef)
+		deployClusterDeploymentCRD(ctx, kubeClient, spec)
+		key := types.NamespacedName{
+			Namespace: Options.Namespace,
+			Name:      spec.ClusterName,
+		}
+		cluster := getClusterFromDB(ctx, kubeClient, db, key, waitForClusterReconcileTimeout)
+		host := setupNewHost(ctx, "hostname1", *cluster.ID)
+		key = types.NamespacedName{
+			Namespace: Options.Namespace,
+			Name:      host.ID.String(),
+		}
+		agent := getAgentCRD(ctx, kubeClient, key)
+		agent.Spec.Hostname = "newhostname"
+		err := kubeClient.Update(ctx, agent)
+		Expect(err).To(BeNil())
+		time.Sleep(time.Second * 45)
+		updatedHost := getHost(*cluster.ID, *host.ID)
+		Expect(updatedHost.RequestedHostname).To(Equal("newhostname"))
+	})
 })
