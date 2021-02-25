@@ -22,7 +22,9 @@ import (
 	"net/http"
 
 	"github.com/go-openapi/strfmt"
+	"github.com/go-openapi/swag"
 	"github.com/jinzhu/gorm"
+	bmh_v1alpha1 "github.com/metal3-io/baremetal-operator/pkg/apis/metal3/v1alpha1"
 	"github.com/openshift/assisted-service/internal/bminventory"
 	"github.com/openshift/assisted-service/internal/common"
 	adiiov1alpha1 "github.com/openshift/assisted-service/internal/controller/api/v1alpha1"
@@ -112,6 +114,31 @@ func (r *AgentReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return result, nil
 	}
 
+	if agent.Spec.Enabled == nil { // TODO(Avishay) s/Enabled/Approved/something else?
+		err = r.handleNewAgent(ctx, agent)
+		if err != nil {
+			r.updateFailure(ctx, agent, err)
+			return result, err
+		}
+		agent.Spec.Enabled = swag.Bool(true)
+		err = r.Client.Update(ctx, agent)
+		if err != nil {
+			r.updateFailure(ctx, agent, err)
+			return result, err
+		}
+	}
+
+	// TODO when do we want to create the spoke BMH?
+	// when the Agent arrives above ^
+	// when the node is getting provisioned? Does the agent have a state for that?
+	if agent.Status.State == "??" {
+		err = r.createSpokeBMH(ctx, agent)
+		if err != nil {
+			r.updateFailure(ctx, agent, err)
+			return result, err
+		}
+	}
+
 	conditionsv1.SetStatusCondition(&agent.Status.Conditions, conditionsv1.Condition{
 		Type:    adiiov1alpha1.AgentSyncedCondition,
 		Status:  corev1.ConditionTrue,
@@ -122,6 +149,56 @@ func (r *AgentReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		r.Log.WithError(updateErr).Error("failed to update agent status")
 	}
 	return result, nil
+}
+
+func (r *AgentReconciler) createSpokeBMH(ctx context.Context, agent *adiiov1alpha1.Agent) error {
+	// TODO
+	// get a client to the remote cluster
+	// find the hub bmh
+	// make a version for the spock:
+	// - how is the spoke BMH different to the hub BMH?
+	// POST the spoke BMH
+	return nil
+}
+
+/*
+   when a new Agent is detected the controller should search for a BMH that has a corresponding MAC address.
+   If found:
+      set the Agent's "approved" property to "True".
+      take Agent's inventory data and copy it (translation may be needed) to the BMH's introspection data via the appropriate annotation.
+*/
+func (r *AgentReconciler) handleNewAgent(ctx context.Context, agent *adiiov1alpha1.Agent) error {
+	bmh, err := r.findBMH(ctx, agent)
+	if err != nil {
+		return err
+	}
+	if bmh == nil {
+		return errors.New("could not find a matching BMH for agent " + agent.Name)
+	}
+	return r.updateBMHHardwareDetails(ctx, agent, bmh)
+}
+
+func (r *AgentReconciler) updateBMHHardwareDetails(ctx context.Context, agent *adiiov1alpha1.Agent, bmh *bmh_v1alpha1.BareMetalHost) error {
+	// TODO(Angus) copy agent hardware deets to bmh
+	return r.Client.Update(ctx, bmh)
+}
+
+func (r *AgentReconciler) findBMH(ctx context.Context, agent *adiiov1alpha1.Agent) (*bmh_v1alpha1.BareMetalHost, error) {
+	bmhList := bmh_v1alpha1.BareMetalHostList{}
+	err := r.Client.List(ctx, &bmhList, client.InNamespace(agent.Namespace)) // I assume the bmh and agent are in the same namespace
+	if err != nil {
+		return nil, err
+	}
+	for _, bmh := range bmhList.Items {
+		for _, nic := range bmh.Status.HardwareDetails.NIC {
+			for _, agentInterface := range agent.Status.Inventory.Interfaces {
+				if nic.MAC == agentInterface.MacAddress {
+					return &bmh, nil
+				}
+			}
+		}
+	}
+	return nil, nil
 }
 
 func (r *AgentReconciler) updateIfNeeded(ctx context.Context, agent *adiiov1alpha1.Agent, c *common.Cluster) (ctrl.Result, error) {

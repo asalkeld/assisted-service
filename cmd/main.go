@@ -430,6 +430,12 @@ func main() {
 				Installer: bm,
 			}).SetupWithManager(ctrlMgr), "unable to create controller Agent")
 
+			failOnError((&controllers.BMHReconciler{
+				Client: ctrlMgr.GetClient(),
+				Log:    log,
+				Scheme: ctrlMgr.GetScheme(),
+			}).SetupWithManager(ctrlMgr), "unable to create controller BMH")
+
 			failOnError(ctrlMgr.Start(ctrl.SetupSignalHandler()), "failed to run manager")
 		}
 	}()
